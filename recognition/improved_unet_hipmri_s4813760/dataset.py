@@ -7,6 +7,8 @@ import nibabel as nib
 from torch.utils.data import Dataset, DataLoader
 import torch
 
+import torchvision.transforms.functional as TF
+from torchvision.transforms import InterpolationMode
 
 # adapted from Appendix B
 def load_nifti_2d(path):
@@ -31,37 +33,22 @@ class HipMRIDataset(Dataset):
     """
     Dataset class for HipMRI 2D slices.
     """
-
-    def __init__(self, data_dir, mode="train", transform=None):
+    def __init__(self, data_dir, mode="train"):
         self.data_dir = data_dir
-        self.transform = transform
 
-        if mode == "train":
-            image_folder = "keras_slices_train"
-            mask_folder = "keras_slices_seg_train"
-        elif mode == "validate":
-            image_folder = "keras_slices_validate"
-            mask_folder = "keras_slices_seg_validate"
-        elif mode == "test":
-            image_folder = "keras_slices_test"
-            mask_folder = "keras_slices_seg_test"
-        else:
-            raise ValueError(
-                f"Invalid mode '{mode}'. Choose 'train', 'validate', or 'test'."
-            )
+        self.image_dir = os.path.join(data_dir, f"keras_slices_{mode}")
+        self.mask_dir = os.path.join(data_dir, f"keras_slices_seg_{mode}")
 
-        image_dir = os.path.join(data_dir, image_folder)
-        mask_dir = os.path.join(data_dir, mask_folder)
+        self.image_paths = sorted(glob.glob(os.path.join(self.image_dir, "*.nii.gz")))
+        self.mask_paths = sorted(glob.glob(os.path.join(self.mask_dir, "*.nii.gz")))
 
-        self.image_paths = sorted(glob.glob(os.path.join(image_dir, "*.nii.gz")))
-        self.mask_paths = sorted(glob.glob(os.path.join(mask_dir, "*.nii.gz")))
+        self.mode = mode
 
-        if len(self.image_paths) == 0:
-            print(f"Warning: No images found in {image_dir}")
-        if len(self.mask_paths) == 0:
-            print(f"Warning: No masks found in {mask_dir}")
-        if len(self.image_paths) != len(self.mask_paths):
-            print(f"Warning: Mismatch in number of images and masks!")
+        # define target size
+        self.target_size = [256, 256]
+
+        if len(self.image_paths) == 0 or len(self.mask_paths) == 0:
+            print(f"Warning: No images or masks found in {self.image_dir} or {self.mask_dir}")
 
     def __len__(self):
         return len(self.image_paths)
@@ -81,6 +68,9 @@ class HipMRIDataset(Dataset):
         # convert to tensors
         image = torch.from_numpy(image)
         mask = torch.from_numpy(mask)
+
+        image = TF.resize(image, self.target_size, interpolation=InterpolationMode.BILINEAR)
+        mask = TF.resize(mask, self.target_size, interpolation=InterpolationMode.NEAREST)
 
         return image, mask
 
