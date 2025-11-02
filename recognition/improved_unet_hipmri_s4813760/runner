@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH --time=10:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --gres=gpu:a100:1
+#SBATCH --job-name=hipmri_train
+#SBATCH --partition=a100
+#SBATCH -o hipmri_train.out
+#SBATCH -e hipmri_train.err
+
+# load required modules 
+conda activate unet_hipmri
+
+# run the training script
+echo "Job started at $(date)"
+echo "Running on node: $(hostname)"
+echo "Starting Python training script..."
+
+python train.py
+
+echo "Job finished at $(date)"
