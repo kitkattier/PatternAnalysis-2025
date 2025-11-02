@@ -75,6 +75,8 @@ This project implements an _"Improved U-Net"_ as specified in `modules.py`. Inst
 
 This block adds a 1x1 convolutional _identity_ mapping to the input, which is then added to the output of the two main convolutions. This residual connection, popularised by _ResNet_ [[2]](#references) helps prevent vanishing gradients. This allows the model to be more stable and train more effectively, leading to better performance.
 
+**Total Parameters:** The final model, as implemented in `modules.py`, has `32,438,017` trainable parameters.
+
 ## Data Preparation
 
 ### Dataset Details
