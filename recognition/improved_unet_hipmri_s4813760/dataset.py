@@ -1,17 +1,16 @@
-# dataset.py
-# Contains the data loader for loading and preprocessing
 import os
 import glob
 import numpy as np
 import nibabel as nib
-from torch.utils.data import Dataset, DataLoader
 import torch
-
+from torch.utils.data import Dataset
+from tqdm import tqdm
 import torchvision.transforms.functional as TF
-from torchvision.transforms import InterpolationMode
+from torchvision import transforms
 
-# adapted from Appendix B
-def load_nifti_2d(path):
+
+# --- This function is adapted from Appendix B [cite: 242-342] ---
+def load_nifti_2d_slice(path):
     """
     Loads a 2D Nifti file as a numpy array.
     """
@@ -21,83 +20,124 @@ def load_nifti_2d(path):
     if len(inImage.shape) == 3:
         inImage = inImage[:, :, 0]  # sometimes extra dims in HipMRI_study data
 
-    # Normalize image to [0, 1] for non-mask images
     inImage = inImage.astype(np.float32)
-    if inImage.max() > 1.0:  # A simple check to see if it's a mask
-        inImage = (inImage - inImage.min()) / (inImage.max() - inImage.min())
-
     return inImage
 
 
 class HipMRIDataset(Dataset):
     """
-    Dataset class for HipMRI 2D slices.
+    PyTorch Dataset class for the HipMRI 2D slices.
+    This version filters the dataset to only include slices
+    that contain the target label.
     """
-    def __init__(self, data_dir, mode="train"):
+
+    def __init__(self, data_dir, mode, target_label=5, target_size=(256, 256)):
         self.data_dir = data_dir
-
-        self.image_dir = os.path.join(data_dir, f"keras_slices_{mode}")
-        self.mask_dir = os.path.join(data_dir, f"keras_slices_seg_{mode}")
-
-        self.image_paths = sorted(glob.glob(os.path.join(self.image_dir, "*.nii.gz")))
-        self.mask_paths = sorted(glob.glob(os.path.join(self.mask_dir, "*.nii.gz")))
-
         self.mode = mode
+        self.target_label = target_label
+        self.target_size = target_size
 
-        # define target size
-        self.target_size = [256, 256]
+        # Define paths based on mode
+        image_folder = f"keras_slices_{mode}"
+        mask_folder = f"keras_slices_seg_{mode}"
 
-        if len(self.image_paths) == 0 or len(self.mask_paths) == 0:
-            print(f"Warning: No images or masks found in {self.image_dir} or {self.mask_dir}")
+        self.image_dir = os.path.join(data_dir, image_folder)
+        self.mask_dir = os.path.join(data_dir, mask_folder)
+
+        image_paths = sorted(glob.glob(os.path.join(self.image_dir, "*.nii.gz")))
+        mask_paths = sorted(glob.glob(os.path.join(self.mask_dir, "*.nii.gz")))
+
+        if len(image_paths) == 0 or len(mask_paths) == 0:
+            print(
+                f"Warning: No images or masks found in {self.image_dir} or {self.mask_dir}"
+            )
+
+        # Filter dataset to only include slices with the target label
+        print(f"Scanning {mode} dataset for prostate (label {self.target_label})...")
+        self.image_paths, self.mask_paths = self._filter_dataset(
+            image_paths, mask_paths
+        )
+        print(f"Found {len(self.image_paths)} {mode} slices containing the prostate.")
+
+    def _filter_dataset(self, image_paths, mask_paths):
+        """
+        Scans all masks and returns only the paths to images/masks
+        that contain the target_label.
+        """
+        filtered_image_paths = []
+        filtered_mask_paths = []
+
+        for img_path, mask_path in tqdm(
+            zip(image_paths, mask_paths),
+            total=len(image_paths),
+            desc=f"Filtering {self.mode} set",
+        ):
+            mask = load_nifti_2d_slice(mask_path)
+            if np.any(mask == self.target_label):
+                filtered_image_paths.append(img_path)
+                filtered_mask_paths.append(mask_path)
+
+        return filtered_image_paths, filtered_mask_paths
 
     def __len__(self):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
         # Load image and mask
-        image = load_nifti_2d(self.image_paths[idx])
-        mask = load_nifti_2d(self.mask_paths[idx])
+        image = load_nifti_2d_slice(self.image_paths[idx])
+        mask = load_nifti_2d_slice(self.mask_paths[idx])
 
-        # focus on the prostate region (label 5)
-        mask = (mask == 5).astype(np.float32)
+        # --- Focus on Prostate Label (Label 5) ---
+        mask = (mask == self.target_label).astype(np.float32)
 
-        # add channel dimensions
-        image = np.expand_dims(image, axis=0)
-        mask = np.expand_dims(mask, axis=0)
+        # Normalize image to [0, 1]
+        if image.max() > 0:
+            image = (image - image.min()) / (image.max() - image.min())
 
-        # convert to tensors
+        # Add channel dimension
+        image = np.expand_dims(image, axis=0)  # Shape: (1, H, W)
+        mask = np.expand_dims(mask, axis=0)  # Shape: (1, H, W)
+
+        # Convert to tensors
         image = torch.from_numpy(image)
         mask = torch.from_numpy(mask)
 
-        image = TF.resize(image, self.target_size, interpolation=InterpolationMode.BILINEAR)
-        mask = TF.resize(mask, self.target_size, interpolation=InterpolationMode.NEAREST)
+        # Resize
+        image = TF.resize(image, self.target_size)
+
+        # use BILINEAR resize and threshold to prevent mask deletion
+        mask = TF.resize(
+            mask, self.target_size, interpolation=transforms.InterpolationMode.BILINEAR
+        )
+        mask = (mask > 0.5).float()
 
         return image, mask
 
 
 if __name__ == "__main__":
-    DATA_DIR = "/home/groups/comp3710/HipMRI_Study_open/keras_slices_data"
+    # data dir, for rangpur its /home/groups/comp3710/HipMRI_Study_open/keras_slices_data
+    DATA_DIR = ""
 
     try:
-        print("Testing 'train' split...")
+        print("Testing 'train' mode...")
         train_dataset = HipMRIDataset(data_dir=DATA_DIR, mode="train")
-        print(f"Found {len(train_dataset)} training images/masks.")
-
-        print("\nTesting 'validate' split...")
-        val_dataset = HipMRIDataset(data_dir=DATA_DIR, mode="validate")
-        print(f"Found {len(val_dataset)} validation images/masks.")
-
-        print("\nTesting 'test' split...")
-        test_dataset = HipMRIDataset(data_dir=DATA_DIR, mode="test")
-        print(f"Found {len(test_dataset)} test images/masks.")
 
         if len(train_dataset) > 0:
-            dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+            dataloader = torch.utils.data.DataLoader(
+                train_dataset, batch_size=4, shuffle=True
+            )
             images, masks = next(iter(dataloader))
 
-            print(f"\nBatch image shape: {images.shape}")
+            print(f"Batch image shape: {images.shape}")
             print(f"Batch mask shape: {masks.shape}")
             print(f"Mask values: {torch.unique(masks)}")
+            print(f"Image min: {images.min()}, max: {images.max()}")
+        else:
+            print("No training data found after filtering.")
+
+        print("\nTesting 'validate' mode...")
+        val_dataset = HipMRIDataset(data_dir=DATA_DIR, mode="validate")
+        print(f"Found {len(val_dataset)} validation images after filtering.")
 
     except FileNotFoundError:
         print(f"Error: Directory not found: {DATA_DIR}")
